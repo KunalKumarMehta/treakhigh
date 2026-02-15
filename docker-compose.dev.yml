@@ -1,0 +1,26 @@
+# =============================================================================
+# TreakHigh — Development Overrides
+# =============================================================================
+# USAGE: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# What this adds:
+#   - PgBouncer port 5432 exposed for local DB tools (DBeaver, psql, etc.)
+#   - n8n UI port 5678 exposed for workflow development
+#   - No resource limits (let the dev machine breathe)
+#   - Postgres verbose logging for debugging
+# =============================================================================
+
+services:
+  pgbouncer:
+    ports:
+      - "5432:5432" # Expose pooler for local DB access
+
+  n8n-main:
+    ports:
+      - "5678:5678" # Expose n8n UI for workflow editing
+    environment:
+      - N8N_LOG_LEVEL=debug
+
+  postgres:
+    environment:
+      - POSTGRES_LOG_STATEMENT=all # Log every query in dev

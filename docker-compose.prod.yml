@@ -1,0 +1,73 @@
+# =============================================================================
+# TreakHigh — Production Overrides
+# =============================================================================
+# USAGE: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# What this adds:
+#   - restart: always (survive host reboots)
+#   - Resource limits on all services
+#   - Read-only root filesystems where possible
+#   - No debug ports exposed (n8n UI only via VPN/SSH tunnel)
+#   - Warn-level logging only
+# =============================================================================
+
+services:
+  frontend:
+    restart: always
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+  postgres:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+        reservations:
+          memory: 2G
+
+  pgbouncer:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+  redis:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  n8n-main:
+    restart: always
+    # SECURITY: No ports exposed in production.
+    # Access n8n UI via SSH tunnel: ssh -L 5678:localhost:5678 user@server
+    environment:
+      - N8N_LOG_LEVEL=warn
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  n8n-worker:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+      replicas: 2 # Scale workers for throughput

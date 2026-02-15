@@ -1,0 +1,36 @@
+# =============================================================================
+# TreakHigh — Staging Overrides
+# =============================================================================
+# USAGE: docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d
+#
+# Mirrors prod but with:
+#   - n8n UI accessible for testing workflows
+#   - Moderate resource limits
+#   - Info-level logging
+# =============================================================================
+
+services:
+  n8n-main:
+    ports:
+      - "5678:5678" # Accessible for staging workflow tests
+    environment:
+      - N8N_LOG_LEVEL=info
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  n8n-worker:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G

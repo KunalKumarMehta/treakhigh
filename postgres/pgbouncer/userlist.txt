@@ -1,0 +1,32 @@
+; =============================================================================
+; PgBouncer Authentication File — userlist.txt
+; =============================================================================
+; Format: "username" "password"
+;
+; The password MUST be the MD5 hash that PostgreSQL expects.
+; PostgreSQL MD5 = 'md5' + md5( password + username )
+;
+; ── How to generate the hash ─────────────────────────────────────────────────
+;
+;   1. Replace <PASSWORD> with your real POSTGRES_PASSWORD value from .env
+;   2. Replace <USER> with your POSTGRES_USER value from .env
+;
+;   3. Run one of the following (all produce identical output):
+;
+;      # Linux / macOS (coreutils)
+;      echo -n "md5$(echo -n '<PASSWORD><USER>' | md5sum | awk '{print $1}')"
+;
+;      # macOS built-in (no coreutils)
+;      echo -n "md5$(echo -n '<PASSWORD><USER>' | md5 -q)"
+;
+;      # Python one-liner (cross-platform)
+;      python3 -c "import hashlib; print('md5' + hashlib.md5(b'<PASSWORD><USER>').hexdigest())"
+;
+;   4. Paste the result (including the leading "md5") as the password below.
+;
+; ── IMPORTANT ────────────────────────────────────────────────────────────────
+;   This file MUST be updated whenever you change POSTGRES_USER or
+;   POSTGRES_PASSWORD in .env. The hash depends on BOTH values.
+; =============================================================================
+
+"postgres_admin" "md5de624d9d65ad538cc2aeb6d455aa8eb8"

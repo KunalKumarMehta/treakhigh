@@ -1,0 +1,194 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://treakhigh.app/schema/xapi-telemetry.json",
+  "title": "Student Quiz Interaction Telemetry (xAPI Compliant)",
+  "description": "Single Source of Truth for telemetry payloads sent from the client Web Worker through the Nginx proxy to the n8n webhook upon question bundle completion. Used for validation in both the frontend (validator.js) and n8n (Function node).",
+  "type": "object",
+  "required": ["actor", "verb", "object", "result", "timestamp"],
+  "additionalProperties": false,
+  "properties": {
+    "signature": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "HMAC-SHA256 hex digest (64 chars). Injected server-side by Nginx njs module — NOT present in client-sent payloads."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of bundle completion, generated client-side."
+    },
+    "actor": {
+      "type": "object",
+      "required": ["objectType", "name", "mbox"],
+      "additionalProperties": false,
+      "properties": {
+        "objectType": {
+          "type": "string",
+          "const": "Agent",
+          "description": "xAPI Actor type — always Agent for individual students."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Anonymized student identifier (e.g. STU-042)."
+        },
+        "mbox": {
+          "type": "string",
+          "pattern": "^mailto:.+@.+\\..+$",
+          "description": "Student email in xAPI mbox format (mailto: URI)."
+        }
+      }
+    },
+    "verb": {
+      "type": "object",
+      "required": ["id", "display"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "const": "http://adlnet.gov/expapi/verbs/completed",
+          "description": "xAPI Verb URI — always 'completed' for quiz bundles."
+        },
+        "display": {
+          "type": "object",
+          "required": ["en-US"],
+          "additionalProperties": false,
+          "properties": {
+            "en-US": {
+              "type": "string",
+              "const": "completed"
+            }
+          }
+        }
+      }
+    },
+    "object": {
+      "type": "object",
+      "required": ["id", "objectType", "definition"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uri",
+          "description": "URI identifying the specific question bundle."
+        },
+        "objectType": {
+          "type": "string",
+          "const": "Activity"
+        },
+        "definition": {
+          "type": "object",
+          "required": ["name", "type"],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "object",
+              "required": ["en-US"],
+              "properties": {
+                "en-US": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Human-readable bundle name."
+                }
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "http://adlnet.gov/expapi/activities/assessment"
+            }
+          }
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["score", "duration", "extensions"],
+      "additionalProperties": false,
+      "properties": {
+        "score": {
+          "type": "object",
+          "required": ["raw", "min", "max", "scaled"],
+          "additionalProperties": false,
+          "properties": {
+            "raw": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Points earned in this bundle."
+            },
+            "min": {
+              "type": "number",
+              "const": 0
+            },
+            "max": {
+              "type": "number",
+              "minimum": 1,
+              "description": "Maximum possible points (must be > 0)."
+            },
+            "scaled": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Normalized score (0.0 to 1.0). Calculated as raw / max."
+            }
+          }
+        },
+        "duration": {
+          "type": "string",
+          "pattern": "^PT(\\d+H)?(\\d+M)?(\\d+S)?$",
+          "description": "ISO 8601 duration for time spent on the bundle."
+        },
+        "extensions": {
+          "type": "object",
+          "description": "Custom psychometric analysis metrics.",
+          "properties": {
+            "http://example.com/xapi/hints_used": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of hints the student used."
+            },
+            "http://example.com/xapi/answer_changes": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of times the student changed their answer."
+            },
+            "http://example.com/xapi/device_type": {
+              "type": "string",
+              "enum": ["mobile", "tablet", "desktop"],
+              "description": "Auto-detected device type from User-Agent."
+            }
+          }
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "registration": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Session UUID linking all events from a single quiz session."
+        },
+        "contextActivities": {
+          "type": "object",
+          "properties": {
+            "parent": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "URI of the parent course."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

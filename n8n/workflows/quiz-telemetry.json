@@ -1,0 +1,167 @@
+{
+  "name": "Quiz Telemetry Ingest",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "quiz-telemetry",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [100, 300],
+      "webhookId": "quiz-telemetry-webhook"
+    },
+    {
+      "parameters": {
+        "functionCode": "// ═══════════════════════════════════════════════════════════════════════════\n// n8n Function Node: HMAC Verification + Payload Validation\n// ═══════════════════════════════════════════════════════════════════════════\n// ARCHITECTURE: This node performs two-phase validation:\n//   Phase 1: HMAC-SHA256 signature verification (tamper detection)\n//   Phase 2: Payload structure validation (data contract enforcement)\n//\n// Error handling returns granular error codes:\n//   MISSING_SIGNATURE  — No signature field in payload\n//   INVALID_SIGNATURE  — HMAC mismatch (potential tampering)\n//   MALFORMED_PAYLOAD  — Missing required xAPI fields\n// ═══════════════════════════════════════════════════════════════════════════\n\nconst crypto = require('crypto');\n\n// Pull shared secret from environment variable\nconst HMAC_SECRET = $env.HMAC_SECRET;\nif (!HMAC_SECRET || HMAC_SECRET === 'CHANGE_ME') {\n  throw new Error('[CONFIG_ERROR] HMAC_SECRET environment variable is not set or is still the default.');\n}\n\nconst payload = $input.first().json;\n\n// ── Phase 1: HMAC Signature Verification ────────────────────────────────\nconst receivedSig = payload.signature;\nif (!receivedSig) {\n  throw new Error('[MISSING_SIGNATURE] No HMAC signature found in payload.');\n}\n\nif (typeof receivedSig !== 'string' || !/^[a-f0-9]{64}$/i.test(receivedSig)) {\n  throw new Error('[INVALID_SIGNATURE] Signature is not a valid SHA-256 hex digest.');\n}\n\n// Build canonical body (everything except signature)\nconst { signature, ...body } = payload;\nconst canonicalBody = JSON.stringify(body);\n\n// Compute expected HMAC-SHA256\nconst expectedSig = crypto\n  .createHmac('sha256', HMAC_SECRET)\n  .update(canonicalBody)\n  .digest('hex');\n\n// Constant-time comparison to prevent timing attacks\ntry {\n  const sigMatch = crypto.timingSafeEqual(\n    Buffer.from(receivedSig, 'hex'),\n    Buffer.from(expectedSig, 'hex')\n  );\n  if (!sigMatch) {\n    throw new Error('[INVALID_SIGNATURE] HMAC verification failed — payload may be tampered.');\n  }\n} catch (e) {\n  if (e.message.includes('INVALID_SIGNATURE')) throw e;\n  throw new Error('[INVALID_SIGNATURE] Signature comparison failed: ' + e.message);\n}\n\n// ── Phase 2: Payload Structure Validation ───────────────────────────────\nconst requiredFields = ['actor', 'verb', 'object', 'result', 'timestamp'];\nconst missingFields = requiredFields.filter(f => !body[f]);\n\nif (missingFields.length > 0) {\n  throw new Error(`[MALFORMED_PAYLOAD] Missing required fields: ${missingFields.join(', ')}`);\n}\n\n// Validate actor has required sub-fields\nif (!body.actor?.mbox || !body.actor?.name) {\n  throw new Error('[MALFORMED_PAYLOAD] actor must contain mbox and name fields.');\n}\n\n// Validate result has score\nif (!body.result?.score || typeof body.result.score.raw !== 'number') {\n  throw new Error('[MALFORMED_PAYLOAD] result.score.raw must be a number.');\n}\n\n// ── Pass verified payload downstream ────────────────────────────────────\nreturn [\n  {\n    json: {\n      ...body,\n      _verified: true,\n      _signature: receivedSig,\n      _verified_at: new Date().toISOString(),\n    },\n  },\n];"
+      },
+      "name": "Verify & Validate",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [320, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json._verified }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Is Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [540, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO telemetry (\n  actor,\n  verb,\n  object,\n  result,\n  context,\n  signature,\n  recorded_at\n) VALUES (\n  $1::jsonb,\n  $2::jsonb,\n  $3::jsonb,\n  $4::jsonb,\n  $5::jsonb,\n  $6,\n  $7::timestamptz\n);",
+        "additionalFields": {
+          "queryParams": "={{ JSON.stringify($json.actor) }}, {{ JSON.stringify($json.verb) }}, {{ JSON.stringify($json.object) }}, {{ JSON.stringify($json.result) }}, {{ JSON.stringify($json.context) }}, {{ $json._signature }}, {{ $json.timestamp }}"
+        }
+      },
+      "name": "Insert Telemetry",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [760, 200],
+      "credentials": {
+        "postgresql": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "quiz_platform_db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// ═══════════════════════════════════════════════════════════════════════════\n// Error Logger — Captures failed telemetry for debugging and auditing.\n// ═══════════════════════════════════════════════════════════════════════════\n// ARCHITECTURE: This node runs when verification/validation fails.\n// It extracts the error code and original payload for dead-letter analysis.\n//\n// In production, this could be extended to:\n//   - Insert into a telemetry_errors table\n//   - Send alerts to a monitoring system (Slack, PagerDuty)\n//   - Write to a dead-letter queue for retry\n// ═══════════════════════════════════════════════════════════════════════════\n\nconst input = $input.first().json;\n\n// Extract error details from the failed Function node\nconst errorMessage = input.error?.message || 'Unknown verification failure';\n\n// Parse error code from the structured error message format: [CODE] message\nconst errorCodeMatch = errorMessage.match(/\\[(\\w+)\\]/);\nconst errorCode = errorCodeMatch ? errorCodeMatch[1] : 'UNKNOWN_ERROR';\n\nreturn [\n  {\n    json: {\n      error_code: errorCode,\n      error_message: errorMessage,\n      original_payload: input,\n      failed_at: new Date().toISOString(),\n      source_ip: input.headers?.['x-real-ip'] || 'unknown',\n    },\n  },\n];"
+      },
+      "name": "Log Error",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [760, 420]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'accepted', timestamp: new Date().toISOString() }) }}"
+      },
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [980, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'rejected', error: $json.error_code, timestamp: new Date().toISOString() }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "name": "Respond Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [980, 420]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify & Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify & Validate": {
+      "main": [
+        [
+          {
+            "node": "Is Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Valid?": {
+      "main": [
+        [
+          {
+            "node": "Insert Telemetry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Telemetry": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Error": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "errorWorkflow": "",
+    "saveExecutionProgress": true,
+    "saveDataSuccessExecution": "all",
+    "executionTimeout": 30
+  },
+  "id": "1"
+}

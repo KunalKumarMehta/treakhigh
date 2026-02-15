@@ -1,0 +1,225 @@
+# =============================================================================
+# TreakHigh Quiz Platform — Base Docker Compose
+# =============================================================================
+# ARCHITECTURE DECISION: This is the base layer. Use with env-specific overrides:
+#   Dev:  docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#   Prod: docker compose -f docker-compose.yml -f docker-compose.prod.yml up
+#
+# NETWORK ISOLATION:
+#   frontend_net — Nginx ↔ n8n-main only (externally reachable services)
+#   backend_net  — All internal services (Postgres, PgBouncer, Redis)
+#   Nginx bridges both networks. No other service is exposed to the host
+#   except through Nginx.
+# =============================================================================
+
+volumes:
+  db_storage:
+  n8n_storage:
+  redis_storage:
+
+networks:
+  frontend_net:
+    driver: bridge
+  backend_net:
+    driver: bridge
+    internal: true # ← No external access to this network
+
+services:
+  # ---------------------------------------------------------------------------
+  # FRONTEND — Nginx reverse proxy + static file server
+  # ---------------------------------------------------------------------------
+  # ARCHITECTURE: Nginx serves the Vanilla JS frontend AND proxies
+  # /api/telemetry to n8n. The njs module signs payloads with HMAC
+  # server-side, so the secret never reaches the browser.
+  # ---------------------------------------------------------------------------
+  frontend:
+    image: nginx:alpine
+    container_name: treakhigh-frontend
+    restart: unless-stopped
+    environment:
+      - HMAC_SECRET=${HMAC_SECRET}
+    volumes:
+      - ./frontend/public:/usr/share/nginx/html:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/njs:/etc/nginx/njs:ro
+    ports:
+      - "80:80"
+    networks:
+      - frontend_net
+      - backend_net # Needs backend to proxy to n8n
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "autoheal=true"
+
+  # ---------------------------------------------------------------------------
+  # DATA PERSISTENCE — PostgreSQL
+  # ---------------------------------------------------------------------------
+  # ARCHITECTURE: Direct access only from backend_net. PgBouncer sits in front.
+  # postgresql.conf mounted for production tuning (8GB/4vCPU profile).
+  # Migrations run via docker-entrypoint-initdb.d (alphabetical order).
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: treakhigh-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      # SECURITY: Removed POSTGRES_HOST_AUTH_METHOD=trust.
+      # All connections now require password authentication.
+    volumes:
+      - db_storage:/var/lib/postgresql/data
+      - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./postgres/migrations:/docker-entrypoint-initdb.d:ro
+    command: postgres -c 'config_file=/etc/postgresql/postgresql.conf'
+    networks:
+      - backend_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # CONNECTION POOLING — PgBouncer
+  # ---------------------------------------------------------------------------
+  # ARCHITECTURE: Sits between application services and Postgres.
+  # Transaction-mode pooling for high concurrency with few backend connections.
+  # NOT exposed on host — only reachable from backend_net.
+  # ---------------------------------------------------------------------------
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: treakhigh-pooler
+    restart: unless-stopped
+    environment:
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_HOST=postgres
+      - DB_NAME=${POSTGRES_DB}
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=${PGBOUNCER_MAX_CLIENT_CONN:-1000}
+      - DEFAULT_POOL_SIZE=${PGBOUNCER_DEFAULT_POOL_SIZE:-50}
+      - AUTH_TYPE=md5
+      - IGNORE_STARTUP_PARAMETERS=extra_float_digits,statement_timeout
+    volumes:
+      - ./postgres/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend_net
+    # SECURITY: No ports exposed — only backend_net services can reach this.
+
+  # ---------------------------------------------------------------------------
+  # MESSAGE BROKER — Redis
+  # ---------------------------------------------------------------------------
+  # ARCHITECTURE: Backs n8n queue mode for decoupled webhook → worker execution.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:alpine
+    container_name: treakhigh-broker
+    restart: unless-stopped
+    volumes:
+      - redis_storage:/data
+    networks:
+      - backend_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # LOGIC ENGINE — n8n (Main: webhook receiver + UI)
+  # ---------------------------------------------------------------------------
+  # ARCHITECTURE: Queue mode. Main node receives webhooks and serves the UI.
+  # Worker nodes process executions from Redis queue.
+  # Connects to BOTH networks: frontend_net (for webhook receipt from Nginx)
+  # and backend_net (for DB writes via PgBouncer).
+  # ---------------------------------------------------------------------------
+  n8n-main:
+    image: n8nio/n8n:latest
+    container_name: treakhigh-n8n-main
+    restart: unless-stopped
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=pgbouncer
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_POSTGRESDB_SSL_MODE=disable
+      - EXECUTIONS_MODE=queue
+      - QUEUE_BULL_REDIS_HOST=redis
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - HMAC_SECRET=${HMAC_SECRET}
+    volumes:
+      - n8n_storage:/home/node/.n8n
+    depends_on:
+      redis:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    networks:
+      - frontend_net # Receives webhooks from Nginx
+      - backend_net # Writes to PgBouncer/Postgres
+
+  # ---------------------------------------------------------------------------
+  # LOGIC ENGINE — n8n (Worker: execution processor)
+  # ---------------------------------------------------------------------------
+  n8n-worker:
+    image: n8nio/n8n:latest
+    container_name: treakhigh-n8n-worker
+    restart: unless-stopped
+    command: worker
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=pgbouncer
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_POSTGRESDB_SSL_MODE=disable
+      - EXECUTIONS_MODE=queue
+      - QUEUE_BULL_REDIS_HOST=redis
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - HMAC_SECRET=${HMAC_SECRET}
+    depends_on:
+      - redis
+      - pgbouncer
+      - n8n-main
+    networks:
+      - backend_net
+    # Workers have no exposed ports — they only pull from Redis.
+
+  # ---------------------------------------------------------------------------
+  # AUTOMATED MAINTENANCE
+  # ---------------------------------------------------------------------------
+  watchtower:
+    image: containrrr/watchtower
+    container_name: treakhigh-updater
+    restart: unless-stopped
+    environment:
+      - DOCKER_API_VERSION=1.44
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 86400 --cleanup
+    # Watchtower doesn't need app networks — it talks to Docker socket only.
+
+  autoheal:
+    image: willfarrell/autoheal
+    container_name: treakhigh-healer
+    restart: unless-stopped
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=all
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
