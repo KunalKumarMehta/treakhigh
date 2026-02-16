@@ -29,4 +29,4 @@
 ;   POSTGRES_PASSWORD in .env. The hash depends on BOTH values.
 ; =============================================================================
 
-"postgres_admin" "md5de624d9d65ad538cc2aeb6d455aa8eb8"
+"postgres_admin" "SCRAM-SHA-256$4096:7G2YdWK0Zf52q7rgwZskAg==$N5VD6bZMTv3Gk8cplkZUIe2HU0HiQEazZO3+2RJPV1E=:C286tbW3t2WlZG6pLCqmqgFsqy+AqcEOWuf9EC5GCxg="
