@@ -14,6 +14,7 @@ A production-grade telemetry ingestion pipeline for quiz platforms, built with *
 ```
 
 **Data Flow:**
+
 1. Quiz frontend sends interaction data to the **Web Worker** (off main thread)
 2. Worker builds an xAPI payload and POSTs it (unsigned) to `/api/telemetry`
 3. **Nginx** reverse proxy intercepts, signs with HMAC-SHA256 via njs module
@@ -22,15 +23,15 @@ A production-grade telemetry ingestion pipeline for quiz platforms, built with *
 
 ## Security Posture
 
-| Layer | Measure |
-|-------|---------|
+| Layer                 | Measure                                                                   |
+| --------------------- | ------------------------------------------------------------------------- |
 | **Secret Management** | All secrets in `.env` (never committed), `.env.example` template provided |
-| **HMAC Signing** | Server-side only (Nginx njs) — no secrets in client JS |
-| **Network Isolation** | Dual Docker networks: `frontend_net` (public) + `backend_net` (internal) |
-| **Database Access** | PgBouncer unexposed; Postgres on internal network only |
-| **Rate Limiting** | Nginx `limit_req_zone` at 10 req/s per IP |
-| **Security Headers** | CSP, X-Frame-Options, X-Content-Type-Options, XSS-Protection |
-| **Auth** | Postgres password auth (no `trust`); n8n basic auth |
+| **HMAC Signing**      | Server-side only (Nginx njs) — no secrets in client JS                    |
+| **Network Isolation** | Dual Docker networks: `frontend_net` (public) + `backend_net` (internal)  |
+| **Database Access**   | PgBouncer unexposed; Postgres on internal network only                    |
+| **Rate Limiting**     | Nginx `limit_req_zone` at 10 req/s per IP                                 |
+| **Security Headers**  | CSP, X-Frame-Options, X-Content-Type-Options, XSS-Protection              |
+| **Auth**              | Postgres password auth (no `trust`); n8n basic auth                       |
 
 ## Prerequisites
 
@@ -49,8 +50,11 @@ openssl rand -base64 32    # for POSTGRES_PASSWORD and N8N_BASIC_AUTH_PASSWORD
 openssl rand -hex 32       # for HMAC_SECRET
 openssl rand -hex 24       # for N8N_ENCRYPTION_KEY
 
-# 2. Update PgBouncer userlist.txt hash (replace <PASSWORD> and <USER>):
-echo -n "md5$(echo -n '<PASSWORD><USER>' | md5sum | awk '{print $1}')"
+# 2. Update PgBouncer userlist.txt with SCRAM secret:
+# Start postgres to generate the secret
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres
+# Retrieve the secret
+docker exec treakhigh-db psql -U postgres_admin -d quiz_platform -t -c "SELECT rolpassword FROM pg_authid WHERE rolname = 'postgres_admin';"
 # Paste result into postgres/pgbouncer/userlist.txt
 
 # 3. Start all services
@@ -68,11 +72,11 @@ docker compose ps
 
 ## Deployment Environments
 
-| Environment | Command | Exposed Ports | Notes |
-|-------------|---------|---------------|-------|
-| **Dev** | `docker compose -f docker-compose.yml -f docker-compose.dev.yml up` | 80, 5432, 5678 | Debug ports, verbose logging |
-| **Staging** | `docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d` | 80, 5678 | Moderate resource limits |
-| **Production** | `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` | 80 only | Resource limits, read-only FS, no debug ports |
+| Environment    | Command                                                                    | Exposed Ports  | Notes                                         |
+| -------------- | -------------------------------------------------------------------------- | -------------- | --------------------------------------------- |
+| **Dev**        | `docker compose -f docker-compose.yml -f docker-compose.dev.yml up`        | 80, 5432, 5678 | Debug ports, verbose logging                  |
+| **Staging**    | `docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d` | 80, 5678       | Moderate resource limits                      |
+| **Production** | `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`    | 80 only        | Resource limits, read-only FS, no debug ports |
 
 > **Production n8n access:** Use SSH tunnel: `ssh -L 5678:localhost:5678 user@server`
 
@@ -80,11 +84,11 @@ docker compose ps
 
 Migrations are in `postgres/migrations/` and run automatically on first container start via `docker-entrypoint-initdb.d`:
 
-| File | Purpose |
-|------|---------|
-| `001_extensions.sql` | `uuid-ossp` + `pgcrypto` |
-| `002_telemetry_table.sql` | Core `telemetry` table DDL |
-| `003_indexes.sql` | Optimized GIN + B-tree indexes |
+| File                      | Purpose                        |
+| ------------------------- | ------------------------------ |
+| `001_extensions.sql`      | `uuid-ossp` + `pgcrypto`       |
+| `002_telemetry_table.sql` | Core `telemetry` table DDL     |
+| `003_indexes.sql`         | Optimized GIN + B-tree indexes |
 
 All migrations are idempotent (`CREATE IF NOT EXISTS`).
 
@@ -131,6 +135,7 @@ treakhigh/
 ## Testing
 
 Send a test payload:
+
 ```bash
 curl -X POST http://localhost/api/telemetry \
   -H "Content-Type: application/json" \
@@ -147,6 +152,7 @@ curl -X POST http://localhost/api/telemetry \
 > **Note:** The signature is injected server-side by Nginx — you don't need to compute it manually.
 
 Verify in the database:
+
 ```sql
 SELECT id, actor->>'name' AS student, recorded_at
 FROM telemetry ORDER BY ingested_at DESC LIMIT 5;

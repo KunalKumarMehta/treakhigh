@@ -11,18 +11,13 @@
 ;   1. Replace <PASSWORD> with your real POSTGRES_PASSWORD value from .env
 ;   2. Replace <USER> with your POSTGRES_USER value from .env
 ;
-;   3. Run one of the following (all produce identical output):
+;   3. Start the database container:
+;      docker compose up -d postgres
 ;
-;      # Linux / macOS (coreutils)
-;      echo -n "md5$(echo -n '<PASSWORD><USER>' | md5sum | awk '{print $1}')"
+;   4. Retrieve the SCRAM-SHA-256 secret:
+;      docker exec treakhigh-db psql -U postgres_admin -d quiz_platform -t -c "SELECT rolpassword FROM pg_authid WHERE rolname = 'postgres_admin';"
 ;
-;      # macOS built-in (no coreutils)
-;      echo -n "md5$(echo -n '<PASSWORD><USER>' | md5 -q)"
-;
-;      # Python one-liner (cross-platform)
-;      python3 -c "import hashlib; print('md5' + hashlib.md5(b'<PASSWORD><USER>').hexdigest())"
-;
-;   4. Paste the result (including the leading "md5") as the password below.
+;   5. Paste the result as the password below.
 ;
 ; ── IMPORTANT ────────────────────────────────────────────────────────────────
 ;   This file MUST be updated whenever you change POSTGRES_USER or
