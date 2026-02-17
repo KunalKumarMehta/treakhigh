@@ -4,6 +4,11 @@
  * Manages quiz lifecycle: bundle selection → question flow → results → telemetry.
  * Uses safe DOM APIs (createElement, textContent) instead of innerHTML to prevent XSS.
  *
+ * ARCHITECTURE CHANGE: Added localStorage-based state recovery. Quiz state
+ * (currentBundle, currentQuestionIndex, answers, startTime) is persisted on
+ * every state change. On page refresh, the user is restored to their exact
+ * question. State is cleared on successful quiz completion.
+ *
  * @class QuizApp
  */
 
@@ -11,6 +16,9 @@ import { QuizService } from "../services/QuizService.js";
 import { QuestionComponent } from "./Question.js";
 import { Timer } from "./Timer.js";
 import { telemetry } from "../app.js";
+
+// ── localStorage key for quiz state persistence ─────────────────────────────
+const PERSIST_KEY = "treakhigh_quiz_state";
 
 export class QuizApp {
   /**
@@ -27,7 +35,104 @@ export class QuizApp {
     };
 
     this.timer = null;
-    this.renderIntro();
+
+    // STATE RECOVERY: Check for saved state from a previous session (e.g., F5)
+    const saved = this._loadPersistedState();
+    if (saved) {
+      this._restoreFromSaved(saved);
+    } else {
+      this.renderIntro();
+    }
+  }
+
+  // ── State Persistence ─────────────────────────────────────────────────
+
+  /**
+   * Save the current quiz state to localStorage.
+   * Called after every meaningful state change to ensure crash resilience.
+   * @private
+   */
+  _persistState() {
+    try {
+      const snapshot = {
+        currentBundle: this.state.currentBundle,
+        currentQuestionIndex: this.state.currentQuestionIndex,
+        answers: this.state.answers,
+        startTime: this.state.startTime,
+      };
+      localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
+    } catch (err) {
+      // localStorage may be full or disabled — non-fatal
+      console.warn("[QuizApp] Failed to persist state:", err.message);
+    }
+  }
+
+  /**
+   * Load persisted state from localStorage.
+   * @returns {Object|null} The saved state or null if none exists
+   * @private
+   */
+  _loadPersistedState() {
+    try {
+      const raw = localStorage.getItem(PERSIST_KEY);
+      if (!raw) return null;
+
+      const saved = JSON.parse(raw);
+
+      // Validate that the saved state has the required fields
+      if (
+        saved &&
+        saved.currentBundle &&
+        typeof saved.currentQuestionIndex === "number"
+      ) {
+        return saved;
+      }
+      return null;
+    } catch (err) {
+      console.warn("[QuizApp] Failed to load persisted state:", err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Clear persisted state from localStorage.
+   * Called on successful quiz completion.
+   * @private
+   */
+  _clearPersistedState() {
+    try {
+      localStorage.removeItem(PERSIST_KEY);
+    } catch (err) {
+      // Non-fatal
+    }
+  }
+
+  /**
+   * Restore quiz from a saved state snapshot.
+   * Hydrates the component state and renders the user's exact position.
+   * @param {Object} saved — Previously persisted state
+   * @private
+   */
+  _restoreFromSaved(saved) {
+    console.log(
+      `[QuizApp] Restoring quiz state: question ${saved.currentQuestionIndex + 1}` +
+        ` of ${saved.currentBundle.questions.length}`,
+    );
+
+    this.state.currentBundle = saved.currentBundle;
+    this.state.currentQuestionIndex = saved.currentQuestionIndex;
+    this.state.answers = saved.answers || {};
+    this.state.startTime = saved.startTime;
+
+    // Render the quiz UI and show the saved question
+    this.renderQuizUI();
+    this.showQuestion(this.state.currentQuestionIndex);
+
+    // Restart the timer from the saved offset
+    const timerElement = document.getElementById("timer");
+    this.timer = new Timer(timerElement);
+    const elapsedMs = Date.now() - this.state.startTime;
+    this.timer.start(Math.floor(elapsedMs / 1000));
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────
@@ -70,9 +175,48 @@ export class QuizApp {
 
   // ── Intro Screen ────────────────────────────────────────────────────
 
-  /** Render the bundle selection screen. */
-  renderIntro() {
-    const bundles = QuizService.getAvailableBundles();
+  /**
+   * Render the bundle selection screen.
+   * ARCHITECTURE CHANGE: Now async because getAvailableBundles() fetches
+   * from the real API. Shows a loading indicator while fetching.
+   */
+  async renderIntro() {
+    // Show loading state while fetching bundles
+    const loadingCard = this._el(
+      "div",
+      { className: "card fade-in", style: { textAlign: "center" } },
+      this._el("h1", {}, "Welcome to TreakHigh"),
+      this._el("p", { className: "subtitle" }, "Loading available quizzes…"),
+    );
+    this._mount(loadingCard);
+
+    // Fetch real bundle list from API (with offline fallback)
+    const bundles = await QuizService.getAvailableBundles();
+
+    // Handle empty bundle list (offline with no cache)
+    if (bundles.length === 0) {
+      const emptyCard = this._el(
+        "div",
+        { className: "card fade-in", style: { textAlign: "center" } },
+        this._el("h1", {}, "Welcome to TreakHigh"),
+        this._el(
+          "p",
+          { className: "subtitle" },
+          "No quizzes available. Please check your internet connection and try again.",
+        ),
+        this._el(
+          "button",
+          {
+            className: "btn btn-primary",
+            style: { marginTop: "1rem" },
+            onClick: () => this.renderIntro(),
+          },
+          "Retry",
+        ),
+      );
+      this._mount(emptyCard);
+      return;
+    }
 
     const quizList = this._el("div", { className: "quiz-list" });
     for (const b of bundles) {
@@ -136,6 +280,9 @@ export class QuizApp {
       this.state.currentQuestionIndex = 0;
       this.state.answers = {};
       this.state.startTime = Date.now();
+
+      // Persist initial state immediately — survives crash from this point
+      this._persistState();
 
       this.renderQuizUI();
       this.showQuestion(0);
@@ -240,6 +387,9 @@ export class QuizApp {
     new QuestionComponent(container, question, (selectedOptionId) => {
       this.state.answers[question.id] = selectedOptionId;
       document.getElementById("btn-next").disabled = false;
+
+      // STATE RECOVERY: Persist after every answer selection
+      this._persistState();
     });
 
     // Update button text for last question
@@ -259,6 +409,9 @@ export class QuizApp {
       this.state.currentQuestionIndex++;
       this.showQuestion(this.state.currentQuestionIndex);
       document.getElementById("btn-next").disabled = true;
+
+      // STATE RECOVERY: Persist after advancing to the next question
+      this._persistState();
     } else {
       this.finishQuiz();
     }
@@ -287,6 +440,9 @@ export class QuizApp {
     const durationSec = this.timer
       ? this.timer.getElapsedSeconds()
       : Math.floor((Date.now() - this.state.startTime) / 1000);
+
+    // STATE RECOVERY: Clear persisted state on successful completion
+    this._clearPersistedState();
 
     this.renderResults(score, maxScore);
 

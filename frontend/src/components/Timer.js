@@ -18,11 +18,16 @@ export class Timer {
     this.elapsedSeconds = 0;
   }
 
-  /** Start the timer. Subsequent calls are ignored if already running. */
-  start() {
+  /**
+   * Start the timer. Subsequent calls are ignored if already running.
+   * @param {number} [offsetSeconds=0] — Seconds already elapsed (for state recovery)
+   */
+  start(offsetSeconds = 0) {
     if (this.intervalId) return; // Already running
-    this.startTime = Date.now();
+    // Shift startTime backwards by the offset so elapsed calculation is correct
+    this.startTime = Date.now() - offsetSeconds * 1000;
     this.intervalId = setInterval(() => this.update(), 1000);
+    if (offsetSeconds > 0) this.update(); // Immediately show the restored time
   }
 
   /** Update the display with the current elapsed time. */
