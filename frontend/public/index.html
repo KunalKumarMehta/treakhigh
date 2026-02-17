@@ -8,66 +8,20 @@
       content="TreakHigh Quiz Platform — Real-time quiz telemetry and analytics."
     />
     <title>TreakHigh Quiz Platform</title>
-    <style>
-      /* Minimal reset for the landing page */
-      *,
-      *::before,
-      *::after {
-        box-sizing: border-box;
-        margin: 0;
-        padding: 0;
-      }
-      body {
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        color: #1a1a2e;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        min-height: 100vh;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-      .container {
-        background: rgba(255, 255, 255, 0.95);
-        padding: 3rem;
-        border-radius: 16px;
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
-        text-align: center;
-        max-width: 480px;
-      }
-      h1 {
-        font-size: 2rem;
-        margin-bottom: 0.75rem;
-        background: linear-gradient(135deg, #667eea, #764ba2);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-      }
-      p {
-        color: #555;
-        line-height: 1.6;
-      }
-      .status {
-        margin-top: 1.5rem;
-        padding: 0.75rem;
-        background: #e8f5e9;
-        border-radius: 8px;
-        font-size: 0.875rem;
-        color: #2e7d32;
-      }
-      .status::before {
-        content: "✓ ";
-      }
-    </style>
+    <!-- CSS is imported via JS in this setup, but for vanilla we need link tags if no bundler -->
+    <!-- Since we are using native ES modules without a bundler, we must manually link CSS -->
+    <link rel="stylesheet" href="/src/styles/main.css" />
+    <link rel="stylesheet" href="/src/styles/components.css" />
   </head>
   <body>
-    <div class="container">
-      <h1>TreakHigh</h1>
-      <p>Quiz Platform Telemetry Service</p>
-      <div class="status" id="status">Frontend service is running</div>
+    <div id="app" class="app-container">
+      <!-- App content injected here -->
+      <div class="card" style="text-align: center">
+        <h1>Loading TreakHigh...</h1>
+      </div>
     </div>
 
-    <!-- Telemetry client — auto-initializes the Web Worker -->
-    <script type="module" src="/src/app.js"></script>
+    <!-- Main Module Entry Point -->
+    <script type="module" src="/src/main.js"></script>
   </body>
 </html>

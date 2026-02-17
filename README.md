@@ -31,7 +31,7 @@ A production-grade telemetry ingestion pipeline for quiz platforms, built with *
 | **Database Access**   | PgBouncer unexposed; Postgres on internal network only                    |
 | **Rate Limiting**     | Nginx `limit_req_zone` at 10 req/s per IP                                 |
 | **Security Headers**  | CSP, X-Frame-Options, X-Content-Type-Options, XSS-Protection              |
-| **Auth**              | Postgres password auth (no `trust`); n8n basic auth                       |
+| **Auth**              | Postgres password auth; n8n basic auth; Redis `--requirepass`             |
 
 ## Prerequisites
 
@@ -46,7 +46,7 @@ cp .env.example .env
 # Edit .env — replace ALL 'CHANGE_ME' values
 
 # Generate secrets:
-openssl rand -base64 32    # for POSTGRES_PASSWORD and N8N_BASIC_AUTH_PASSWORD
+openssl rand -base64 32    # for POSTGRES_PASSWORD, N8N_BASIC_AUTH_PASSWORD, REDIS_PASSWORD
 openssl rand -hex 32       # for HMAC_SECRET
 openssl rand -hex 24       # for N8N_ENCRYPTION_KEY
 
@@ -137,7 +137,7 @@ treakhigh/
 Send a test payload:
 
 ```bash
-curl -X POST http://localhost/api/telemetry \
+curl -X POST http://localhost:5678/webhook-test/quiz-telemetry \
   -H "Content-Type: application/json" \
   -d '{
     "actor": {"objectType":"Agent","name":"STU-001","mbox":"mailto:stu001@school.edu"},
