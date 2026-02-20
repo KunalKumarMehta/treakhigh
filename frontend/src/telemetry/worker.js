@@ -153,8 +153,19 @@ async function syncOutbox() {
             bundleId: record.bundleId,
             timestamp: record.payload.timestamp,
           });
+        } else if (response.status === 429) {
+          // ⚠️ Rate limited (429) — transient failure, leave in outbox for retry
+          console.warn(
+            `[TreakHigh Worker] Rate limited syncing record ${record.id}`,
+          );
+          self.postMessage({
+            status: "warning",
+            httpStatus: response.status,
+            bundleId: record.bundleId,
+            message: "Rate limited, retrying later.",
+          });
         } else if (response.status >= 400 && response.status < 500) {
-          // ❌ Client error (4xx) — permanent failure, remove from outbox
+          // ❌ Client error (4xx except 429) — permanent failure, remove from outbox
           await deleteFromOutbox(record.id);
           self.postMessage({
             status: "error",
