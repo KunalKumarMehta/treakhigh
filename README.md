@@ -3,7 +3,7 @@
 > Status: Prototype. This is an early-stage startup experiment retained for its
 > product and systems history; it is not presented as a complete product.
 
-A production-grade telemetry ingestion pipeline for quiz platforms, built with **Vanilla JS + Web Workers**, **Nginx**, **n8n**, and **PostgreSQL**.
+A prototype telemetry ingestion pipeline for quiz platforms, built with **Vanilla JS + Web Workers**, **Nginx**, **n8n**, and **PostgreSQL**.
 
 ## Architecture
 
